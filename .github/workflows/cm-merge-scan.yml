@@ -51,9 +51,9 @@ jobs:
           runner_image: ghcr.io/${{ github.repository_owner }}/codemender-runner:latest
           # Required: Google Cloud Workload Identity Federation settings for the
           # CodeMender API.
-          gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
-          gcp_workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          gcp_service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          gcp_project_id: ${{ vars.CODEMENDER_GCP_PROJECT_ID }}
+          gcp_workload_identity_provider: ${{ secrets.CODEMENDER_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.CODEMENDER_SERVICE_ACCOUNT }}
           # log_level: debug
           # Defaults: run cm-runner under gVisor (needed for cm's sandbox),
           # pinned to a tested release. See README.md → "Inputs".

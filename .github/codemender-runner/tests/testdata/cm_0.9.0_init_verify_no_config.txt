@@ -1,0 +1,26 @@
+🔍 CodeMender Environment Verification
+───────────────────────────────────────────────────────
+
+  ✅ Workspace directory    /home/user/.codemender
+  ❌ Config file            /home/user/.codemender/config.yaml not found. Run 'cm init' to create it.
+  ✅ Config parsing         Config loaded successfully
+  ✅ Server                 https://aiplatform.googleapis.com
+  ❌ Server connectivity    Failed to create client: resolving Application Default Credentials: Error: GCP project ID was not found. Checked (in order):
+  1. GOOGLE_CLOUD_PROJECT environment variable
+  2. Application Default Credentials
+  3. gcloud CLI configuration file
+
+Set one with:
+  export GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+or:
+  gcloud config set project YOUR_PROJECT_ID
+or:
+  gcloud auth application-default login --project YOUR_PROJECT_ID
+  ⚠️  Build command          Not configured. Set build.command in config.yaml for post-fix verification.
+  ⚠️  VCS type               Not configured. Set vcs.type in config.yaml (git, mercurial, or custom).
+  ⚠️  State database         Not yet created. Will be created on first scan/fix.
+
+───────────────────────────────────────────────────────
+  Results: 3 passed, 3 warnings, 2 failed
+
+  Run 'cm init' to fix critical issues.

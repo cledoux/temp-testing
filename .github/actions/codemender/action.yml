@@ -1,0 +1,75 @@
+# CodeMender GitHub Action (composite)
+#
+# Used as a single step from a repository's own workflow, after copying this
+# directory into that repository (see README.md → "Using it in a repository"):
+#
+#   - uses: actions/checkout@v4
+#   - uses: ./.github/actions/codemender
+#
+# M0 (walking skeleton): on a pull request, run `cm-runner version` in a
+# `docker run` sandbox and post the result as one PR comment.
+#
+# Security boundary: tokens are used only by the steps below, on the host.
+# They are never passed into the cm-runner container.
+
+name: CodeMender
+description: Run CodeMender (cm-runner) on pull requests and report back on the PR.
+
+inputs:
+  runner_image:
+    description: >-
+      cm-runner container image the repository can pull, pinned to a commit SHA
+      tag (not :latest) so every run uses the same build.
+    required: true
+  registry_token:
+    description: >-
+      Optional. Token used only to pull `runner_image` from GHCR. Defaults to
+      the workflow's automatic token. Only needed when the image is in a
+      registry this repository's token cannot read (e.g. another org).
+    required: false
+    default: ''
+  log_level:
+    description: cm-runner log level (debug, info, warning, error). Logs go to the job log.
+    required: false
+    default: info
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install action dependencies
+      shell: bash
+      run: python -m pip install --quiet -r "${{ github.action_path }}/requirements.txt"
+
+    # Pull on the host, then always log out (even if the pull fails) so the
+    # credential isn't left in ~/.docker/config.json. The container never
+    # sees it either way.
+    - name: Pull cm-runner image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.runner_image }}
+        TOKEN: ${{ inputs.registry_token || github.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        # GitHub does not enforce `required: true` for composite action inputs.
+        if [[ -z "$IMAGE" ]]; then
+          echo "::error::The 'runner_image' input is required (a cm-runner image this repository can pull)."
+          exit 1
+        fi
+        if [[ "$IMAGE" == ghcr.io/* ]]; then
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+        fi
+        docker pull "$IMAGE"
+
+    - name: Run CodeMender
+      shell: bash
+      env:
+        CODEMENDER_RUNNER_IMAGE: ${{ inputs.runner_image }}
+        CODEMENDER_LOG_LEVEL: ${{ inputs.log_level }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: python "${{ github.action_path }}/src/gha_runner.py"

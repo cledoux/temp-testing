@@ -1,0 +1,16 @@
+🔍 CodeMender Environment Verification
+───────────────────────────────────────────────────────
+
+  ✅ Workspace directory    /home/user/.codemender
+  ✅ Config file            /home/user/.codemender/config.yaml
+  ✅ Config parsing         Config loaded successfully
+  ✅ Server                 https://aiplatform.googleapis.com
+  ⚠️  Server connectivity    Skipped — not supported by this client transport
+  ⚠️  Build command          Not configured. Set build.command in config.yaml for post-fix verification.
+  ⚠️  VCS type               Not configured. Set vcs.type in config.yaml (git, mercurial, or custom).
+  ⚠️  State database         Not yet created. Will be created on first scan/fix.
+
+───────────────────────────────────────────────────────
+  Results: 4 passed, 4 warnings
+
+  All critical checks passed. Resolve warnings for best experience.

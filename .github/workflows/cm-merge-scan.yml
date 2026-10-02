@@ -1,0 +1,61 @@
+# Workflow template: copy this file to `.github/workflows/cm-merge-scan.yml` in
+# the repository you want CodeMender to run on.
+#
+# Prerequisite: the package's `actions/codemender/` directory has been copied
+# into this repository at `.github/actions/codemender/` (see README.md in the package → "Using it in a
+# repository"). The workflow runs that local copy; it does not reference the
+# codemender-runner repository.
+#
+# M1 (differential PR scan): every pull request runs `cm-runner init` +
+# `cm-runner find-diff` in a gVisor container, uploads `report.sarif` and
+# `report.md` as workflow artifacts, and posts/updates one CodeMender PR comment
+# with the findings.
+
+name: CodeMender
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Target (base) branches to scan. Adjust to your default/release branches.
+    branches: [main, master]
+
+# One run per PR; a new push cancels the previous, now-stale run.
+concurrency:
+  group: codemender-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read        # Check out this repo (needed to find the local action and diff)
+  id-token: write       # Mint OIDC token for Google Cloud Workload Identity Federation
+  packages: read        # Pull the cm-runner image from GHCR
+  pull-requests: write  # Post / update the CodeMender PR comment
+
+jobs:
+  codemender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Required: the action lives in this repository, so it must be checked
+      # out first. `fetch-depth: 0` ensures the PR base commit is present locally
+      # for `cm-runner find-diff`, and `persist-credentials: false` keeps the
+      # GitHub token out of .git/config (ADR-0003).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/codemender
+        with:
+          # Required: a cm-runner image this repository can pull, pinned to a
+          # commit SHA tag. Replace with your own registry/image.
+          runner_image: ghcr.io/${{ github.repository_owner }}/codemender-runner:latest
+          # Required: Google Cloud Workload Identity Federation settings for the
+          # CodeMender API.
+          gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+          gcp_workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          gcp_service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          # log_level: debug
+          # Defaults: run cm-runner under gVisor (needed for cm's sandbox),
+          # pinned to a tested release. See README.md → "Inputs".
+          # container_runtime: runsc
+          # gvisor_release: '20260921.0'

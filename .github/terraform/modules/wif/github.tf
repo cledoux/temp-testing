@@ -34,7 +34,7 @@ resource "github_issue_label" "codemender_scan" {
 resource "github_actions_secret" "wif_provider" {
   for_each    = local.short_repo_names
   repository  = each.value
-  secret_name = "GCP_WORKLOAD_IDENTITY_PROVIDER"
+  secret_name = "CODEMENDER_WORKLOAD_IDENTITY_PROVIDER"
   value       = google_iam_workload_identity_pool_provider.github_provider.name
 }
 
@@ -42,8 +42,16 @@ resource "github_actions_secret" "wif_provider" {
 resource "github_actions_secret" "runner_sa" {
   for_each    = local.short_repo_names
   repository  = each.value
-  secret_name = "GCP_SERVICE_ACCOUNT"
+  secret_name = "CODEMENDER_SERVICE_ACCOUNT"
   value       = google_service_account.runner_sa.email
+}
+
+# Configure the project for running codemender in.
+resource "github_actions_variable" "gcp_project_id" {
+  for_each      = local.short_repo_names
+  repository    = each.value
+  variable_name = "CODEMENDER_GCP_PROJECT_ID"
+  value         = var.gcp_project_id
 }
 
 # 4. Configure GH_APP_ID secret in target repositories (when provided)
@@ -58,7 +66,7 @@ resource "github_actions_secret" "app_id" {
 resource "github_actions_variable" "gcs_transit_bucket" {
   for_each      = var.execution_mode == "cloud_run" ? local.short_repo_names : toset([])
   repository    = each.value
-  variable_name = "GCS_TRANSIT_BUCKET"
+  variable_name = "CODEMENDER_GCS_TRANSIT_BUCKET"
   value         = var.gcs_transit_bucket_name
 }
 
@@ -66,7 +74,7 @@ resource "github_actions_variable" "gcs_transit_bucket" {
 resource "github_actions_variable" "cloud_run_job_name" {
   for_each      = (var.execution_mode == "cloud_run" && var.cloud_run_job_name != "") ? local.short_repo_names : toset([])
   repository    = each.value
-  variable_name = "CLOUD_RUN_JOB_NAME"
+  variable_name = "CODEMENDER_CLOUD_RUN_JOB_NAME"
   value         = var.cloud_run_job_name
 }
 

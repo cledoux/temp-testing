@@ -127,8 +127,7 @@ github_owner = "cledoux"
 #   determines which repositories have GitHub secrets/variables/labels bootstrapped
 #   (or set to empty [] to skip all GitHub API operations).
 github_repositories = [
-  # "my-repo",
-  # "my-github-org/another-repo",
+    "cledoux/temp-testing",
 ]
 
 

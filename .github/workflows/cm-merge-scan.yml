@@ -42,5 +42,5 @@ jobs:
         with:
           # Required: a cm-runner image this repository can pull, pinned to a
           # commit SHA tag. Replace with your own registry/image.
-          runner_image: <your-registry>/codemender-runner:<commit-sha>
+          runner_image: cledoux/codemender-runner:<commit-sha>
           # log_level: debug

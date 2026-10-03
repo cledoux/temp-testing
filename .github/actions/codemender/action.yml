@@ -1,0 +1,195 @@
+# CodeMender GitHub Action (composite)
+#
+# Used as a single step from a repository's own workflow, after copying this
+# directory into that repository (see README.md → "Using it in a repository"):
+#
+#   - uses: actions/checkout@v4
+#   - uses: ./.github/actions/codemender
+#
+# M1 (differential PR scan): on a pull request, authenticate to Google Cloud via
+# Workload Identity Federation, run `cm-runner init` + `cm-runner find-diff` in
+# a `docker run` container under gVisor, upload `report.sarif` and `report.md`
+# as workflow artifacts, and post/update the sticky PR summary comment.
+#
+# Security boundary: GitHub tokens are used only by host steps below (pulling
+# the image and posting the PR comment). They are never passed into the
+# cm-runner container (ADR-0003).
+#
+# Container runtime: by default the container runs under gVisor (`runsc`)
+# with `--cap-add SYS_ADMIN`, so cm's own sandbox can start. That capability
+# is granted only by gVisor's user-space kernel, not by the runner VM's
+# kernel. See README.md → "Security model".
+
+name: CodeMender
+description: Run CodeMender (cm-runner) on pull requests and report back on the PR.
+
+inputs:
+  runner_image:
+    description: >-
+      cm-runner container image the repository can pull, pinned to a commit SHA
+      tag (not :latest) so every run uses the same build.
+    required: true
+  gcp_project_id:
+    description: >-
+      Google Cloud project ID used by CodeMender (`GOOGLE_CLOUD_PROJECT`).
+    required: true
+  gcp_workload_identity_provider:
+    description: >-
+      Full Google Cloud Workload Identity Provider resource name
+      (`projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`).
+    required: true
+  gcp_service_account:
+    description: >-
+      Google Cloud service account email for Workload Identity Federation.
+    required: true
+  registry_token:
+    description: >-
+      Optional. Token used only to pull `runner_image` from GHCR. Defaults to
+      the workflow's automatic token. Only needed when the image is in a
+      registry this repository's token cannot read (e.g. another org).
+    required: false
+    default: ''
+  log_level:
+    description: cm-runner log level (debug, info, warning, error). Logs go to the job log.
+    required: false
+    default: info
+  container_runtime:
+    description: >-
+      Container runtime for cm-runner. `runsc` (default) installs gVisor and
+      runs the container under it, which cm's sandbox needs. `runc` is an
+      explicit opt-out: plain Docker, where cm's sandbox can't start.
+    required: false
+    default: runsc
+  gvisor_release:
+    description: >-
+      gVisor release to install when `container_runtime` is `runsc`, as
+      `yyyymmdd` or a point release `yyyymmdd.N`
+      (https://gvisor.dev/docs/user_guide/install/#versions). Pinned so every
+      run uses the same build.
+    required: false
+    default: '20260921.0'
+  artifact_retention_days:
+    description: >-
+      Number of days to retain uploaded `report.sarif` and `report.md` workflow
+      artifacts.
+    required: false
+    default: '3'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install action dependencies
+      shell: bash
+      run: python -m pip install --quiet -r "${{ github.action_path }}/requirements.txt"
+
+    - name: Verify PR base commit is present
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${BASE_SHA}" ]]; then
+          exit 0
+        fi
+        if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+          echo "Base commit ${BASE_SHA} not in shallow clone; attempting git fetch..."
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}" || {
+            echo "::error::Base commit ${BASE_SHA} is not present in the local checkout. Set 'fetch-depth: 0' on actions/checkout."
+            exit 1
+          }
+        fi
+
+    - name: Authenticate to Google Cloud (WIF)
+      id: gcp_auth
+      uses: google-github-actions/auth@v2
+      with:
+        project_id: ${{ inputs.gcp_project_id }}
+        workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+        create_credentials_file: true
+
+    # Download the pinned release, check its sha512, and register `runsc` as
+    # a Docker runtime. Inputs are passed through env and validated, never
+    # interpolated into the script.
+    - name: Install gVisor
+      if: inputs.container_runtime == 'runsc'
+      shell: bash
+      env:
+        GVISOR_RELEASE: ${{ inputs.gvisor_release }}
+      run: |
+        set -euo pipefail
+        START=$SECONDS
+        if [[ ! "$GVISOR_RELEASE" =~ ^[0-9]{8}(\.[0-9]+)?$ ]]; then
+          echo "::error::Invalid 'gvisor_release' (expected yyyymmdd or yyyymmdd.N)."
+          exit 1
+        fi
+        ARCH=$(uname -m)
+        URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/${ARCH}"
+        WORK=$(mktemp -d)
+        cd "$WORK"
+        curl -fsSLO "${URL}/gvisor.tar.zstd"
+        curl -fsSLO "${URL}/gvisor.tar.zstd.sha512"
+        sha512sum -c gvisor.tar.zstd.sha512
+        # runsc, containerd-shim-runsc-v1 and gvisor-bin/ (runsc looks for it
+        # next to its own binary). /usr/local/bin is readable by all users,
+        # which runsc needs to re-exec itself unprivileged.
+        sudo tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+        cd /
+        rm -rf "$WORK"
+        sudo /usr/local/bin/runsc install
+        sudo systemctl reload docker
+        /usr/local/bin/runsc --version
+        docker info --format '{{json .Runtimes}}' | grep -q '"runsc"' \
+          || { echo "::error::Docker did not register the runsc runtime."; exit 1; }
+        echo "::notice::gVisor ${GVISOR_RELEASE} (${ARCH}) installed in $((SECONDS - START))s."
+
+    # Pull on the host, then always log out (even if the pull fails) so the
+    # credential isn't left in ~/.docker/config.json. The container never
+    # sees it either way.
+    - name: Pull cm-runner image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.runner_image }}
+        TOKEN: ${{ inputs.registry_token || github.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        # GitHub does not enforce `required: true` for composite action inputs.
+        if [[ -z "$IMAGE" ]]; then
+          echo "::error::The 'runner_image' input is required (a cm-runner image this repository can pull)."
+          exit 1
+        fi
+        if [[ "$IMAGE" == ghcr.io/* ]]; then
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+        fi
+        docker pull "$IMAGE"
+
+    - name: Run CodeMender
+      shell: bash
+      env:
+        CODEMENDER_RUNNER_IMAGE: ${{ inputs.runner_image }}
+        CODEMENDER_LOG_LEVEL: ${{ inputs.log_level }}
+        CODEMENDER_CONTAINER_RUNTIME: ${{ inputs.container_runtime }}
+        CODEMENDER_OUT_DIR: ${{ runner.temp }}/codemender-out-${{ github.run_id }}-${{ github.run_attempt }}
+        GOOGLE_CLOUD_PROJECT: ${{ inputs.gcp_project_id }}
+        GOOGLE_GHA_CREDS_PATH: ${{ steps.gcp_auth.outputs.credentials_file_path }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        chmod a+r "${GOOGLE_GHA_CREDS_PATH}"
+        python "${{ github.action_path }}/src/gha_runner.py"
+
+    - name: Upload CodeMender report artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: codemender-report-pr-${{ github.event.pull_request.number || github.run_id }}
+        path: |
+          ${{ runner.temp }}/codemender-out-${{ github.run_id }}-${{ github.run_attempt }}/report.sarif
+          ${{ runner.temp }}/codemender-out-${{ github.run_id }}-${{ github.run_attempt }}/report.md
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.artifact_retention_days }}
